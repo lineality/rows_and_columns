@@ -26,11 +26,14 @@
 /// - Clear error handling with comprehensive user feedback
 use std::env;
 use std::path::PathBuf;
+use std::io::{self, Write};
 
-// Import CSV processing capabilities
+// Import enhanced CSV analysis capabilities
 use super::csv_processor_module::{
     analyze_csv_file_structure_and_types,
     CsvAnalysisResults,
+    perform_enhanced_statistical_analysis,
+    display_enhanced_csv_analysis_results,
 };
 
 // Import our custom error types for comprehensive error handling
@@ -109,8 +112,9 @@ pub fn run_rows_and_columns_application() -> RowsAndColumnsResult<()> {
             }
         }
     } else {
-        // No command line arguments - show available options
-        display_interactive_mode_coming_soon();
+        // No command line arguments - start interactive file input
+        let csv_file_path_from_qa = interactive_csv_file_path_input()?;
+        return process_csv_file_from_command_line(&csv_file_path_from_qa, &directory_paths);
     }
     
     Ok(())
@@ -138,22 +142,205 @@ fn display_usage_help_information() {
     println!();
 }
 
-/// Displays information about interactive mode (placeholder for future implementation)
+/// Interactive Q&A to get CSV file path from user
 /// 
-/// This function informs users that interactive mode is coming in a future version
-/// and shows them how to use the current command line interface.
-fn display_interactive_mode_coming_soon() {
-    println!("Interactive CSV file selection mode coming in next phase.");
+/// This function provides a user-friendly interface for selecting a CSV file
+/// when no command line arguments are provided. It includes validation and
+/// helpful prompts to guide the user.
+/// 
+/// # Returns
+/// * `RowsAndColumnsResult<String>` - The validated CSV file path or error
+/// 
+/// # Errors
+/// * `RowsAndColumnsError::FileSystemError` - If file input/validation fails
+/// * `RowsAndColumnsError::ConfigurationError` - If user cancels or invalid input
+fn interactive_csv_file_path_input() -> RowsAndColumnsResult<String> {
+    println!("No CSV file specified. Let's find one to analyze!");
     println!();
-    println!("For now, please specify a CSV file directly:");
-    println!("  rows_and_columns <path_to_csv_file>");
+    
+    loop {
+        // Display helpful instructions
+        display_file_input_instructions();
+        
+        // Get user input
+        print!("Enter CSV file path: ");
+        io::stdout().flush().map_err(|io_error| {
+            create_file_system_error("Failed to flush stdout for user input", io_error)
+        })?;
+        
+        let mut user_file_path_input = String::new();
+        io::stdin().read_line(&mut user_file_path_input).map_err(|io_error| {
+            create_file_system_error("Failed to read user input", io_error)
+        })?;
+        
+        let trimmed_file_path = user_file_path_input.trim();
+        
+        // Handle special commands
+        match trimmed_file_path.to_lowercase().as_str() {
+            "" => {
+                println!("Please enter a file path, or 'quit' to exit.");
+                println!();
+                continue;
+            }
+            "quit" | "q" | "exit" => {
+                println!("Goodbye!");
+                return Err(create_configuration_error("User chose to quit file selection"));
+            }
+            "help" | "h" | "?" => {
+                display_detailed_file_input_help();
+                continue;
+            }
+            _ => {
+                // Try to validate the provided file path
+                match validate_user_provided_csv_file_path(trimmed_file_path) {
+                    Ok(validated_path) => {
+                        println!("✓ Found CSV file: {}", validated_path);
+                        println!();
+                        return Ok(validated_path);
+                    }
+                    Err(validation_error) => {
+                        println!("❌ File issue: {}", validation_error);
+                        println!("Please try again, or type 'help' for assistance.");
+                        println!();
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Displays helpful instructions for file input
+/// 
+/// This function shows users what kind of input is expected and what
+/// commands are available during the file selection process.
+fn display_file_input_instructions() {
+    println!("📁 File Selection Help:");
+    println!("  • Enter the path to your CSV file (absolute or relative)");
+    println!("  • Examples:");
+    println!("    data/customers.csv");
+    println!("    /home/user/reports/sales.csv");
+    println!("    ../datasets/analysis_data.csv");
+    println!("  • Special commands:");
+    println!("    'help' - Show detailed help");
+    println!("    'quit' - Exit the application");
     println!();
-    println!("Example:");
-    println!("  rows_and_columns data/my_data.csv");
+}
+
+/// Displays detailed help for file input process
+/// 
+/// This function provides comprehensive guidance for users who need
+/// more help with file path specification and troubleshooting.
+fn display_detailed_file_input_help() {
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("  Detailed File Input Help");
+    println!("═══════════════════════════════════════════════════════════════");
     println!();
-    println!("For help:");
-    println!("  rows_and_columns --help");
+    
+    println!("FILE PATH FORMATS:");
+    println!("  Absolute paths (full path from root):");
+    println!("    Linux/Mac: /home/username/data/file.csv");
+    println!("    Windows:   C:\\Users\\username\\data\\file.csv");
     println!();
+    
+    println!("  Relative paths (from current directory):");
+    println!("    Same directory:    file.csv");
+    println!("    Subdirectory:      data/file.csv");
+    println!("    Parent directory:  ../file.csv");
+    println!();
+    
+    println!("FILE REQUIREMENTS:");
+    println!("  • File must exist and be readable");
+    println!("  • File extension should be .csv or .tsv");
+    println!("  • File should contain comma-separated values");
+    println!();
+    
+    println!("TROUBLESHOOTING:");
+    println!("  • Check file path spelling and capitalization");
+    println!("  • Ensure file permissions allow reading");
+    println!("  • Use tab completion in your terminal if available");
+    println!("  • Try absolute path if relative path doesn't work");
+    println!();
+    
+    println!("EXAMPLES OF VALID PATHS:");
+    println!("  ./data/customers.csv");
+    println!("  ~/Documents/spreadsheet.csv");
+    println!("  /tmp/analysis_data.csv");
+    println!();
+    
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+}
+
+/// Validates a user-provided CSV file path with helpful error messages
+/// 
+/// This function checks the file path and provides specific, actionable
+/// error messages to help users resolve file access issues.
+/// 
+/// # Arguments
+/// * `user_file_path` - The file path provided by the user
+/// 
+/// # Returns
+/// * `Result<String, String>` - Validated path or user-friendly error message
+fn validate_user_provided_csv_file_path(user_file_path: &str) -> Result<String, String> {
+    // Convert to PathBuf for easier manipulation
+    let file_path = PathBuf::from(user_file_path);
+    
+    // Check if file exists
+    if !file_path.exists() {
+        return Err(format!(
+            "File not found: '{}'. Please check the path and try again.",
+            user_file_path
+        ));
+    }
+    
+    // Check if it's actually a file (not a directory)
+    if !file_path.is_file() {
+        if file_path.is_dir() {
+            return Err(format!(
+                "'{}' is a directory, not a file. Please specify a CSV file within this directory.",
+                user_file_path
+            ));
+        } else {
+            return Err(format!(
+                "'{}' exists but is not a regular file. Please specify a CSV file.",
+                user_file_path
+            ));
+        }
+    }
+    
+    // Check file extension (with helpful suggestions)
+    let file_extension = file_path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase());
+    
+    match file_extension.as_deref() {
+        Some("csv") | Some("tsv") => {
+            // Perfect - this looks like a CSV file
+        }
+        Some(other_extension) => {
+            println!("⚠️  Warning: File extension '{}' is not typical for CSV files.", other_extension);
+            println!("   Proceeding anyway, but ensure this contains comma-separated values.");
+        }
+        None => {
+            println!("⚠️  Warning: File has no extension.");
+            println!("   Proceeding anyway, but ensure this contains comma-separated values.");
+        }
+    }
+    
+    // Try to convert to absolute path
+    let absolute_file_path = match file_path.canonicalize() {
+        Ok(abs_path) => abs_path,
+        Err(_) => {
+            return Err(format!(
+                "Cannot resolve absolute path for '{}'. Check file permissions and path validity.",
+                user_file_path
+            ));
+        }
+    };
+    
+    // Return the absolute path as a string
+    Ok(absolute_file_path.to_string_lossy().to_string())
 }
 
 // /// Processes a CSV file specified via command line argument
@@ -204,10 +391,51 @@ fn display_interactive_mode_coming_soon() {
 //     Ok(())
 // }
 
-/// Processes a CSV file specified via command line argument
+// /// Processes a CSV file specified via command line argument
+// /// 
+// /// This function validates the provided CSV file path, analyzes its structure and
+// /// column types, creates/updates metadata files, and prepares for directory-based storage.
+// /// 
+// /// # Arguments
+// /// * `csv_file_path_argument` - The CSV file path provided as command line argument
+// /// * `directory_paths` - The application directory structure for data storage
+// /// 
+// /// # Returns
+// /// * `RowsAndColumnsResult<()>` - Success or detailed error information
+// /// 
+// /// # Errors
+// /// * `RowsAndColumnsError::FileSystemError` - If file access or validation fails
+// /// * `RowsAndColumnsError::CsvProcessingError` - If CSV parsing fails
+// /// * `RowsAndColumnsError::MetadataError` - If metadata operations fail
+// fn process_csv_file_from_command_line(
+//     csv_file_path_argument: &str,
+//     directory_paths: &ApplicationDirectoryPaths,
+// ) -> RowsAndColumnsResult<()> {
+//     println!("Processing CSV file: {}", csv_file_path_argument);
+//     println!();
+    
+//     // Step 1: Validate the provided file path
+//     let csv_file_absolute_path = validate_csv_file_path_from_argument(csv_file_path_argument)?;
+    
+//     // Step 2: Display basic file information
+//     display_csv_file_processing_information(&csv_file_absolute_path)?;
+    
+//     // Step 3: Analyze CSV structure and column types
+//     let csv_analysis_results = analyze_csv_file_structure_and_types(&csv_file_absolute_path)?;
+    
+//     // Step 4: Display detailed analysis results
+//     display_csv_analysis_results(&csv_analysis_results)?;
+    
+//     // Step 5: Show next steps for user
+//     display_csv_processing_completion_status(&csv_analysis_results, directory_paths);
+    
+//     Ok(())
+// }
+
+/// Processes a CSV file specified via command line argument with enhanced statistical analysis
 /// 
-/// This function validates the provided CSV file path, analyzes its structure and
-/// column types, creates/updates metadata files, and prepares for directory-based storage.
+/// This function validates the provided CSV file path, performs comprehensive analysis including
+/// pandas-style statistical measures, creates/updates metadata files, and displays detailed results.
 /// 
 /// # Arguments
 /// * `csv_file_path_argument` - The CSV file path provided as command line argument
@@ -233,135 +461,222 @@ fn process_csv_file_from_command_line(
     // Step 2: Display basic file information
     display_csv_file_processing_information(&csv_file_absolute_path)?;
     
-    // Step 3: Analyze CSV structure and column types
+    // Step 3: Analyze CSV structure and column types (basic analysis)
     let csv_analysis_results = analyze_csv_file_structure_and_types(&csv_file_absolute_path)?;
     
-    // Step 4: Display detailed analysis results
-    display_csv_analysis_results(&csv_analysis_results)?;
+    // Step 4: Perform enhanced statistical analysis
+    let enhanced_analysis_results = perform_enhanced_statistical_analysis(
+        &csv_file_absolute_path,
+        &csv_analysis_results
+    )?;
     
-    // Step 5: Show next steps for user
-    display_csv_processing_completion_status(&csv_analysis_results, directory_paths);
+    // Step 5: Display comprehensive analysis results
+    display_enhanced_csv_analysis_results(&enhanced_analysis_results)?;
     
-    Ok(())
-}
-
-/// Displays comprehensive CSV analysis results to the user
-/// 
-/// This function shows detailed information about the CSV structure, column types,
-/// and metadata file status after analysis is complete.
-/// 
-/// # Arguments
-/// * `analysis_results` - The complete CSV analysis results
-/// 
-/// # Returns
-/// * `RowsAndColumnsResult<()>` - Success or error if display fails
-fn display_csv_analysis_results(analysis_results: &CsvAnalysisResults) -> RowsAndColumnsResult<()> {
-    println!("═══════════════════════════════════════════════════════════════");
-    println!("  CSV Analysis Results");
-    println!("═══════════════════════════════════════════════════════════════");
-    println!();
-    
-    // Display file structure summary
-    println!("File Structure:");
-    println!("  Total Columns: {}", analysis_results.total_column_count);
-    println!("  Data Rows: {}", analysis_results.total_data_row_count);
-    println!("  Has Header Row: {}", analysis_results.has_header_row);
-    println!();
-    
-    // Display column information
-    println!("Column Analysis:");
-    for (display_index, column_info) in analysis_results.column_information_list.iter().enumerate() {
-        let display_number = display_index + 1;
-        
-        println!("  {}. {} ({})", 
-            display_number,
-            column_info.column_name,
-            column_info.detected_data_type.to_toml_string()
-        );
-        
-        println!("     Values: {} non-empty, {} empty",
-            column_info.non_empty_value_count,
-            column_info.empty_value_count
-        );
-        
-        if !column_info.sample_values.is_empty() {
-            let sample_display = if column_info.sample_values.len() <= 3 {
-                column_info.sample_values.join(", ")
-            } else {
-                format!("{}, {} ... (showing 3 of {})",
-                    column_info.sample_values[0],
-                    column_info.sample_values[1],
-                    column_info.sample_values.len()
-                )
-            };
-            println!("     Samples: {}", sample_display);
-        }
-        
-        println!();
-    }
-    
-    // Display metadata file information
-    println!("Metadata File:");
-    if analysis_results.metadata_file_already_existed {
-        println!("  ✓ Updated existing: {}", analysis_results.metadata_file_path.display());
-    } else {
-        println!("  ✓ Created new: {}", analysis_results.metadata_file_path.display());
-    }
-    println!();
-    
-    println!("═══════════════════════════════════════════════════════════════");
-    println!();
+    // Step 6: Display completion status and next steps
+    display_enhanced_csv_processing_completion_status(&csv_analysis_results, directory_paths);
     
     Ok(())
 }
 
-/// Displays completion status and next steps after CSV processing
+/// Displays enhanced completion status and next steps after comprehensive CSV processing
 /// 
-/// This function shows what was accomplished and what features will be
-/// available in future implementation phases.
+/// This function shows what statistical analysis was accomplished and what features
+/// will be available in future implementation phases.
 /// 
 /// # Arguments
 /// * `analysis_results` - The CSV analysis results
 /// * `directory_paths` - The application directory structure
-fn display_csv_processing_completion_status(
+fn display_enhanced_csv_processing_completion_status(
     analysis_results: &CsvAnalysisResults,
     directory_paths: &ApplicationDirectoryPaths,
 ) {
-    println!("✓ CSV Processing Complete!");
+    println!("✓ Comprehensive CSV Analysis Complete!");
     println!();
     
     println!("What was accomplished:");
     println!("  • File structure analyzed and validated");
     println!("  • Column data types detected: {} columns", analysis_results.total_column_count);
+    println!("  • Enhanced statistical analysis performed:");
+    
+    // Count field types for summary
+    let mut continuous_count = 0;
+    let mut categorical_count = 0;
+    
+    for column_info in &analysis_results.column_information_list {
+        match column_info.detected_data_type {
+            super::csv_processor_module::CsvColumnDataType::Integer | 
+            super::csv_processor_module::CsvColumnDataType::Float => continuous_count += 1,
+            super::csv_processor_module::CsvColumnDataType::Boolean | 
+            super::csv_processor_module::CsvColumnDataType::String => categorical_count += 1,
+        }
+    }
+    
+    if continuous_count > 0 {
+        println!("    - {} continuous columns: min, max, quartiles, mean, stdev", continuous_count);
+    }
+    if categorical_count > 0 {
+        println!("    - {} categorical columns: value distributions, mode, uniqueness", categorical_count);
+    }
+    
     println!("  • Metadata TOML file created/updated");
-    println!("  • Ready for directory-based storage");
+    println!("  • Ready for directory-based storage and visualization");
     println!();
     
     println!("Data will be stored in:");
     println!("  {}", directory_paths.csv_imports_directory.display());
     println!();
     
-    println!("Next implementation phases will include:");
-    println!("  • Directory structure creation for each column");
-    println!("  • Row-by-row data import to individual cell files");
-    println!("  • Statistical analysis (pandas-style describe())");
-    println!("  • TUI dashboard with charts and visualizations");
-    println!("  • Interactive data exploration interface");
+    println!("Available next steps:");
+    println!("  1. Load data into directory-based storage");
+    println!("  2. Generate statistical summary reports");
+    println!("  3. Create TUI visualizations:");
+    
+    if continuous_count > 0 {
+        println!("     • Histograms for numerical data");
+        println!("     • Box-and-whisker plots");
+        println!("     • Scatter plots (if multiple numerical columns)");
+    }
+    if categorical_count > 0 {
+        println!("     • Bar charts for categorical data");
+        println!("     • Value distribution displays");
+    }
+    
+    println!("  4. Interactive data exploration interface");
     println!();
     
-    // Show the user how to view their metadata file
+    // Show user how to access files and rerun analysis
     let filename_only = analysis_results.csv_file_path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("unknown");
     
-    println!("To view the generated metadata:");
-    println!("  cat {}", analysis_results.metadata_file_path.display());
+    println!("File references:");
+    println!("  Metadata: {}", analysis_results.metadata_file_path.display());
+    println!("  Original:  {}", analysis_results.csv_file_path.display());
     println!();
     println!("To reprocess this file:");
     println!("  rows_and_columns {}", analysis_results.csv_file_path.display());
     println!();
 }
+
+// /// Displays comprehensive CSV analysis results to the user
+// /// 
+// /// This function shows detailed information about the CSV structure, column types,
+// /// and metadata file status after analysis is complete.
+// /// 
+// /// # Arguments
+// /// * `analysis_results` - The complete CSV analysis results
+// /// 
+// /// # Returns
+// /// * `RowsAndColumnsResult<()>` - Success or error if display fails
+// fn display_csv_analysis_results(analysis_results: &CsvAnalysisResults) -> RowsAndColumnsResult<()> {
+//     println!("═══════════════════════════════════════════════════════════════");
+//     println!("  CSV Analysis Results");
+//     println!("═══════════════════════════════════════════════════════════════");
+//     println!();
+    
+//     // Display file structure summary
+//     println!("File Structure:");
+//     println!("  Total Columns: {}", analysis_results.total_column_count);
+//     println!("  Data Rows: {}", analysis_results.total_data_row_count);
+//     println!("  Has Header Row: {}", analysis_results.has_header_row);
+//     println!();
+    
+//     // Display column information
+//     println!("Column Analysis:");
+//     for (display_index, column_info) in analysis_results.column_information_list.iter().enumerate() {
+//         let display_number = display_index + 1;
+        
+//         println!("  {}. {} ({})", 
+//             display_number,
+//             column_info.column_name,
+//             column_info.detected_data_type.to_toml_string()
+//         );
+        
+//         println!("     Values: {} non-empty, {} empty",
+//             column_info.non_empty_value_count,
+//             column_info.empty_value_count
+//         );
+        
+//         if !column_info.sample_values.is_empty() {
+//             let sample_display = if column_info.sample_values.len() <= 3 {
+//                 column_info.sample_values.join(", ")
+//             } else {
+//                 format!("{}, {} ... (showing 3 of {})",
+//                     column_info.sample_values[0],
+//                     column_info.sample_values[1],
+//                     column_info.sample_values.len()
+//                 )
+//             };
+//             println!("     Samples: {}", sample_display);
+//         }
+        
+//         println!();
+//     }
+    
+//     // Display metadata file information
+//     println!("Metadata File:");
+//     if analysis_results.metadata_file_already_existed {
+//         println!("  ✓ Updated existing: {}", analysis_results.metadata_file_path.display());
+//     } else {
+//         println!("  ✓ Created new: {}", analysis_results.metadata_file_path.display());
+//     }
+//     println!();
+    
+//     println!("═══════════════════════════════════════════════════════════════");
+//     println!();
+    
+//     Ok(())
+// }
+
+// /// Displays completion status and next steps after CSV processing
+// /// 
+// /// This function shows what was accomplished and what features will be
+// /// available in future implementation phases.
+// /// 
+// /// # Arguments
+// /// * `analysis_results` - The CSV analysis results
+// /// * `directory_paths` - The application directory structure
+// fn display_csv_processing_completion_status(
+//     analysis_results: &CsvAnalysisResults,
+//     directory_paths: &ApplicationDirectoryPaths,
+// ) {
+//     println!("✓ CSV Processing Complete!");
+//     println!();
+    
+//     println!("What was accomplished:");
+//     println!("  • File structure analyzed and validated");
+//     println!("  • Column data types detected: {} columns", analysis_results.total_column_count);
+//     println!("  • Metadata TOML file created/updated");
+//     println!("  • Ready for directory-based storage");
+//     println!();
+    
+//     println!("Data will be stored in:");
+//     println!("  {}", directory_paths.csv_imports_directory.display());
+//     println!();
+    
+//     println!("Next implementation phases will include:");
+//     println!("  • Directory structure creation for each column");
+//     println!("  • Row-by-row data import to individual cell files");
+//     println!("  • Statistical analysis (pandas-style describe())");
+//     println!("  • TUI dashboard with charts and visualizations");
+//     println!("  • Interactive data exploration interface");
+//     println!();
+    
+//     // Show the user how to view their metadata file
+//     let filename_only = analysis_results.csv_file_path
+//         .file_stem()
+//         .and_then(|stem| stem.to_str())
+//         .unwrap_or("unknown");
+    
+//     println!("To view the generated metadata:");
+//     println!("  cat {}", analysis_results.metadata_file_path.display());
+//     println!();
+//     println!("To reprocess this file:");
+//     println!("  rows_and_columns {}", analysis_results.csv_file_path.display());
+//     println!();
+// }
 
 /// Validates a CSV file path provided as command line argument
 /// 

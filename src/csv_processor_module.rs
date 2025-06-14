@@ -656,3 +656,513 @@ fn create_or_update_metadata_file(
     
     Ok(())
 }
+
+/// Enhanced statistical information for numerical columns
+/// 
+/// This structure contains comprehensive statistical measures similar to
+/// pandas.describe() for continuous numerical data.
+#[derive(Debug, Clone)]
+pub struct NumericalColumnStatistics {
+    /// Minimum value found
+    pub min_value: f64,
+    
+    /// First quartile (25th percentile)
+    pub q1_value: f64,
+    
+    /// Second quartile (50th percentile / median)
+    pub q2_median_value: f64,
+    
+    /// Third quartile (75th percentile)
+    pub q3_value: f64,
+    
+    /// Maximum value found
+    pub max_value: f64,
+    
+    /// Mean (average) value
+    pub mean_value: f64,
+    
+    /// Standard deviation
+    pub standard_deviation: f64,
+    
+    /// Percentage of missing/empty values
+    pub missing_percentage: f64,
+}
+
+/// Value frequency information for categorical columns
+/// 
+/// This represents how often each unique value appears in a categorical column.
+#[derive(Debug, Clone)]
+pub struct CategoricalValueFrequency {
+    /// The actual value/category
+    pub value: String,
+    
+    /// Number of times this value appears
+    pub count: usize,
+    
+    /// Percentage of total non-empty values this represents
+    pub percentage: f64,
+}
+
+/// Enhanced statistical information for categorical columns
+/// 
+/// This structure contains comprehensive information about categorical data
+/// including value distributions and diversity measures.
+#[derive(Debug, Clone)]
+pub struct CategoricalColumnStatistics {
+    /// Total number of unique values/categories
+    pub unique_value_count: usize,
+    
+    /// List of value frequencies (sorted by frequency, descending)
+    pub value_frequencies: Vec<CategoricalValueFrequency>,
+    
+    /// Percentage of missing/empty values
+    pub missing_percentage: f64,
+    
+    /// Most common value (mode)
+    pub mode_value: Option<String>,
+    
+    /// Percentage that the mode represents
+    pub mode_percentage: f64,
+}
+
+/// Field type classification for enhanced analysis
+/// 
+/// This enum distinguishes between different types of data for appropriate
+/// statistical analysis methods.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CsvFieldType {
+    /// Categorical data (including boolean as a special case)
+    Categorical,
+    
+    /// Continuous numerical data
+    Continuous,
+}
+
+/// Enhanced column information with comprehensive statistics
+/// 
+/// This structure extends the basic column information with detailed
+/// statistical analysis appropriate for the column's data type.
+#[derive(Debug, Clone)]
+pub struct EnhancedCsvColumnInformation {
+    /// Basic column information
+    pub basic_info: CsvColumnInformation,
+    
+    /// Field type classification
+    pub field_type: CsvFieldType,
+    
+    /// Statistical information for numerical columns (None for categorical)
+    pub numerical_statistics: Option<NumericalColumnStatistics>,
+    
+    /// Statistical information for categorical columns (None for numerical) 
+    pub categorical_statistics: Option<CategoricalColumnStatistics>,
+}
+
+/// Performs enhanced statistical analysis on CSV columns
+/// 
+/// This function provides comprehensive pandas-style statistical analysis
+/// including appropriate measures for categorical and continuous data types.
+/// 
+/// # Arguments
+/// * `csv_file_path` - Path to the CSV file to analyze
+/// * `basic_analysis_results` - Results from basic CSV structure analysis
+/// 
+/// # Returns
+/// * `RowsAndColumnsResult<Vec<EnhancedCsvColumnInformation>>` - Enhanced column analysis
+pub fn perform_enhanced_statistical_analysis(
+    csv_file_path: &PathBuf,
+    basic_analysis_results: &CsvAnalysisResults,
+) -> RowsAndColumnsResult<Vec<EnhancedCsvColumnInformation>> {
+    println!("📊 Performing enhanced statistical analysis...");
+    
+    let mut enhanced_column_info_list = Vec::new();
+    
+    // Collect all data values for each column for comprehensive analysis
+    let all_column_values = collect_all_column_values(
+        csv_file_path,
+        basic_analysis_results.has_header_row,
+        basic_analysis_results.total_column_count,
+    )?;
+    
+    // Analyze each column with enhanced statistics
+    for basic_column_info in &basic_analysis_results.column_information_list {
+        let column_values = &all_column_values[basic_column_info.column_index];
+        
+        // Determine field type (categorical vs continuous)
+        let field_type = determine_field_type(&basic_column_info.detected_data_type);
+        
+        // Generate appropriate statistics based on field type
+        let (numerical_statistics, categorical_statistics) = match field_type {
+            CsvFieldType::Continuous => {
+                let numerical_stats = calculate_numerical_statistics(column_values)?;
+                (Some(numerical_stats), None)
+            }
+            CsvFieldType::Categorical => {
+                let categorical_stats = calculate_categorical_statistics(column_values)?;
+                (None, Some(categorical_stats))
+            }
+        };
+        
+        let enhanced_column_info = EnhancedCsvColumnInformation {
+            basic_info: basic_column_info.clone(),
+            field_type,
+            numerical_statistics,
+            categorical_statistics,
+        };
+        
+        enhanced_column_info_list.push(enhanced_column_info);
+    }
+    
+    println!("  ✓ Enhanced statistical analysis complete");
+    
+    Ok(enhanced_column_info_list)
+}
+
+/// Collects all values from CSV columns for comprehensive statistical analysis
+/// 
+/// This function reads through the entire CSV file to collect all values
+/// for detailed statistical calculations.
+/// 
+/// # Arguments
+/// * `csv_file_path` - Path to the CSV file
+/// * `has_header_row` - Whether file has header row to skip
+/// * `column_count` - Number of columns expected
+/// 
+/// # Returns
+/// * `RowsAndColumnsResult<Vec<Vec<String>>>` - All values for each column
+fn collect_all_column_values(
+    csv_file_path: &PathBuf,
+    has_header_row: bool,
+    column_count: usize,
+) -> RowsAndColumnsResult<Vec<Vec<String>>> {
+    let csv_file = File::open(csv_file_path)
+        .map_err(|io_error| {
+            create_file_system_error(
+                &format!("Failed to open CSV file for enhanced analysis: {}", csv_file_path.display()),
+                io_error
+            )
+        })?;
+    
+    let csv_reader = BufReader::new(csv_file);
+    let mut csv_lines = csv_reader.lines();
+    
+    // Skip header row if present
+    if has_header_row {
+        csv_lines.next();
+    }
+    
+    // Initialize storage for all column values
+    let mut all_column_values: Vec<Vec<String>> = vec![Vec::new(); column_count];
+    
+    // Read all data rows
+    for line_result in csv_lines {
+        let csv_line = line_result.map_err(|io_error| {
+            create_file_system_error("Failed to read CSV line during enhanced analysis", io_error)
+        })?;
+        
+        let field_values = parse_csv_line_into_fields(&csv_line);
+        
+        // Store values for each column
+        for (column_index, field_value) in field_values.iter().enumerate() {
+            if column_index >= column_count {
+                continue; // Skip extra fields
+            }
+            
+            all_column_values[column_index].push(field_value.trim().to_string());
+        }
+    }
+    
+    Ok(all_column_values)
+}
+
+/// Determines field type based on detected data type
+/// 
+/// # Arguments
+/// * `detected_data_type` - The basic data type detected
+/// 
+/// # Returns
+/// * `CsvFieldType` - Categorical or Continuous classification
+fn determine_field_type(detected_data_type: &CsvColumnDataType) -> CsvFieldType {
+    match detected_data_type {
+        CsvColumnDataType::Integer | CsvColumnDataType::Float => CsvFieldType::Continuous,
+        CsvColumnDataType::Boolean | CsvColumnDataType::String => CsvFieldType::Categorical,
+    }
+}
+
+/// Calculates comprehensive numerical statistics for continuous data
+/// 
+/// # Arguments
+/// * `column_values` - All values from the column
+/// 
+/// # Returns
+/// * `RowsAndColumnsResult<NumericalColumnStatistics>` - Complete numerical analysis
+fn calculate_numerical_statistics(column_values: &[String]) -> RowsAndColumnsResult<NumericalColumnStatistics> {
+    // Parse all numerical values, filtering out empty/invalid ones
+    let mut numerical_values = Vec::new();
+    let mut empty_count = 0;
+    
+    for value_string in column_values {
+        let trimmed_value = value_string.trim();
+        
+        if trimmed_value.is_empty() {
+            empty_count += 1;
+        } else {
+            // Try to parse as float (works for both integers and floats)
+            match trimmed_value.parse::<f64>() {
+                Ok(numerical_value) => numerical_values.push(numerical_value),
+                Err(_) => empty_count += 1, // Count unparseable as empty
+            }
+        }
+    }
+    
+    if numerical_values.is_empty() {
+        return Err(create_csv_processing_error(
+            "No valid numerical values found for statistical analysis",
+            None,
+            None
+        ));
+    }
+    
+    // Sort values for percentile calculations
+    numerical_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    
+    // Calculate basic statistics
+    let min_value = numerical_values[0];
+    let max_value = numerical_values[numerical_values.len() - 1];
+    let mean_value = numerical_values.iter().sum::<f64>() / numerical_values.len() as f64;
+    
+    // Calculate percentiles
+    let q1_value = calculate_percentile(&numerical_values, 25.0);
+    let q2_median_value = calculate_percentile(&numerical_values, 50.0);
+    let q3_value = calculate_percentile(&numerical_values, 75.0);
+    
+    // Calculate standard deviation
+    let variance = numerical_values.iter()
+        .map(|value| (value - mean_value).powi(2))
+        .sum::<f64>() / numerical_values.len() as f64;
+    let standard_deviation = variance.sqrt();
+    
+    // Calculate missing percentage
+    let total_values = column_values.len();
+    let missing_percentage = if total_values > 0 {
+        (empty_count as f64 / total_values as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    Ok(NumericalColumnStatistics {
+        min_value,
+        q1_value,
+        q2_median_value,
+        q3_value,
+        max_value,
+        mean_value,
+        standard_deviation,
+        missing_percentage,
+    })
+}
+
+/// Calculates percentile value from sorted numerical data
+/// 
+/// # Arguments
+/// * `sorted_values` - Sorted numerical values
+/// * `percentile` - Percentile to calculate (0.0 to 100.0)
+/// 
+/// # Returns
+/// * `f64` - The percentile value
+fn calculate_percentile(sorted_values: &[f64], percentile: f64) -> f64 {
+    if sorted_values.is_empty() {
+        return 0.0;
+    }
+    
+    let index = (percentile / 100.0) * (sorted_values.len() - 1) as f64;
+    let lower_index = index.floor() as usize;
+    let upper_index = index.ceil() as usize;
+    
+    if lower_index == upper_index {
+        sorted_values[lower_index]
+    } else {
+        let weight = index - lower_index as f64;
+        sorted_values[lower_index] * (1.0 - weight) + sorted_values[upper_index] * weight
+    }
+}
+
+/// Calculates comprehensive categorical statistics
+/// 
+/// # Arguments
+/// * `column_values` - All values from the column
+/// 
+/// # Returns  
+/// * `RowsAndColumnsResult<CategoricalColumnStatistics>` - Complete categorical analysis
+fn calculate_categorical_statistics(column_values: &[String]) -> RowsAndColumnsResult<CategoricalColumnStatistics> {
+    let mut value_counts = HashMap::new();
+    let mut empty_count = 0;
+    
+    // Count occurrences of each value
+    for value_string in column_values {
+        let trimmed_value = value_string.trim();
+        
+        if trimmed_value.is_empty() {
+            empty_count += 1;
+        } else {
+            *value_counts.entry(trimmed_value.to_string()).or_insert(0) += 1;
+        }
+    }
+    
+    let total_non_empty_values: usize = value_counts.values().sum();
+    let unique_value_count = value_counts.len();
+    
+    // Create frequency list sorted by count (descending)
+    let mut value_frequencies: Vec<CategoricalValueFrequency> = value_counts
+        .into_iter()
+        .map(|(value, count)| {
+            let percentage = if total_non_empty_values > 0 {
+                (count as f64 / total_non_empty_values as f64) * 100.0
+            } else {
+                0.0
+            };
+            
+            CategoricalValueFrequency {
+                value,
+                count,
+                percentage,
+            }
+        })
+        .collect();
+    
+    // Sort by count (descending)
+    value_frequencies.sort_by(|a, b| b.count.cmp(&a.count));
+    
+    // Find mode (most common value)
+    let (mode_value, mode_percentage) = if let Some(most_frequent) = value_frequencies.first() {
+        (Some(most_frequent.value.clone()), most_frequent.percentage)
+    } else {
+        (None, 0.0)
+    };
+    
+    // Calculate missing percentage
+    let total_values = column_values.len();
+    let missing_percentage = if total_values > 0 {
+        (empty_count as f64 / total_values as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    Ok(CategoricalColumnStatistics {
+        unique_value_count,
+        value_frequencies,
+        missing_percentage,
+        mode_value,
+        mode_percentage,
+    })
+}
+
+/// Displays enhanced CSV analysis results with comprehensive statistics
+/// 
+/// This function shows detailed pandas-style statistical information
+/// appropriate for each column's data type.
+/// 
+/// # Arguments
+/// * `enhanced_analysis_results` - The enhanced statistical analysis results
+/// 
+/// # Returns
+/// * `RowsAndColumnsResult<()>` - Success or display error
+pub fn display_enhanced_csv_analysis_results(
+    enhanced_analysis_results: &[EnhancedCsvColumnInformation]
+) -> RowsAndColumnsResult<()> {
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("  Enhanced CSV Analysis Results");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    
+    for (display_index, enhanced_column_info) in enhanced_analysis_results.iter().enumerate() {
+        let display_number = display_index + 1;
+        let basic_info = &enhanced_column_info.basic_info;
+        
+        // Display column header
+        println!("{}. {} ({} - {})", 
+            display_number,
+            basic_info.column_name,
+            basic_info.detected_data_type.to_toml_string(),
+            match enhanced_column_info.field_type {
+                CsvFieldType::Categorical => "categorical",
+                CsvFieldType::Continuous => "continuous",
+            }
+        );
+        
+        // Display appropriate statistics based on field type
+        match enhanced_column_info.field_type {
+            CsvFieldType::Continuous => {
+                if let Some(numerical_stats) = &enhanced_column_info.numerical_statistics {
+                    display_numerical_statistics(numerical_stats);
+                }
+            }
+            CsvFieldType::Categorical => {
+                if let Some(categorical_stats) = &enhanced_column_info.categorical_statistics {
+                    display_categorical_statistics(categorical_stats);
+                }
+            }
+        }
+        
+        println!();
+    }
+    
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    
+    Ok(())
+}
+
+/// Displays numerical statistics in pandas-style format
+/// 
+/// # Arguments
+/// * `numerical_stats` - The numerical statistics to display
+fn display_numerical_statistics(numerical_stats: &NumericalColumnStatistics) {
+    println!("   Field-type: continuous");
+    println!("   min: {:.3}    q1: {:.3}    q2: {:.3}    q3: {:.3}    max: {:.3}", 
+        numerical_stats.min_value,
+        numerical_stats.q1_value,
+        numerical_stats.q2_median_value,
+        numerical_stats.q3_value,
+        numerical_stats.max_value
+    );
+    println!("   mean: {:.3}    stdev: {:.3}", 
+        numerical_stats.mean_value,
+        numerical_stats.standard_deviation
+    );
+    println!("   %missing: {:.1}%", numerical_stats.missing_percentage);
+}
+
+/// Displays categorical statistics with value distribution
+/// 
+/// # Arguments
+/// * `categorical_stats` - The categorical statistics to display
+fn display_categorical_statistics(categorical_stats: &CategoricalColumnStatistics) {
+    println!("   Field-type: categorical");
+    println!("   Unique values: {}", categorical_stats.unique_value_count);
+    println!("   %missing: {:.1}%", categorical_stats.missing_percentage);
+    
+    if let Some(mode_value) = &categorical_stats.mode_value {
+        println!("   Mode: {} ({:.1}%)", mode_value, categorical_stats.mode_percentage);
+    }
+    
+    println!("   Value Distribution:");
+    
+    // Show top values (limit to 5 for display)
+    let display_limit = 5.min(categorical_stats.value_frequencies.len());
+    for value_freq in categorical_stats.value_frequencies.iter().take(display_limit) {
+        println!("     {}: {:.1}% ({} values)", 
+            value_freq.value, 
+            value_freq.percentage, 
+            value_freq.count
+        );
+    }
+    
+    // Show summary if there are more values
+    if categorical_stats.value_frequencies.len() > display_limit {
+        let remaining_count = categorical_stats.value_frequencies.len() - display_limit;
+        println!("     ... (showing top {} of {} unique values)", 
+            display_limit, 
+            categorical_stats.unique_value_count
+        );
+    }
+}
