@@ -28,6 +28,8 @@ use std::env;
 use std::path::PathBuf;
 use std::io::{self, Write};
 
+use crate::csv_processor_module::EnhancedCsvColumnInformation;
+
 // Import enhanced CSV analysis capabilities
 use super::csv_processor_module::{
     analyze_csv_file_structure_and_types,
@@ -432,6 +434,169 @@ fn validate_user_provided_csv_file_path(user_file_path: &str) -> Result<String, 
 //     Ok(())
 // }
 
+/// Launches interactive menu system after CSV analysis is complete
+/// 
+/// This function provides a logical progression of options based on what
+/// has been accomplished so far (CSV analysis) and what can be done next.
+/// 
+/// # Arguments
+/// * `csv_analysis_results` - The basic CSV analysis results
+/// * `enhanced_analysis_results` - The enhanced statistical analysis results
+/// * `directory_paths` - Application directory structure
+/// 
+/// # Returns
+/// * `RowsAndColumnsResult<()>` - Success or error
+fn launch_interactive_post_analysis_menu(
+    csv_analysis_results: &CsvAnalysisResults,
+    enhanced_analysis_results: &[EnhancedCsvColumnInformation],
+    directory_paths: &ApplicationDirectoryPaths,
+) -> RowsAndColumnsResult<()> {
+    println!("Analysis complete! Choose your next step:");
+    println!();
+    
+    loop {
+        // Display menu options
+        display_post_analysis_main_menu();
+        
+        // Get user selection
+        let user_selection = get_user_menu_selection("Selection")?;
+        
+        // Process user choice
+        match user_selection.to_lowercase().as_str() {
+            "1" | "review" | "types" | "edit" => {
+                println!("🔧 Column data type review selected.");
+                println!("This will allow you to verify and modify detected column types.");
+                println!("(Implementation coming in next step)");
+                println!();
+            }
+            "2" | "load" | "import" | "directory" => {
+                println!("📂 Data loading into directory structure selected.");
+                println!("This will create the scalable directory-based storage system.");
+                println!("(Implementation coming in next step)");
+                println!();
+            }
+            "3" | "export" | "report" | "save" => {
+                println!("📄 Export analysis report selected.");
+                println!("This will save the current analysis to a file.");
+                println!("(Implementation coming in next step)");
+                println!();
+            }
+            "4" | "quit" | "exit" | "q" => {
+                println!("Thank you for using rows_and_columns!");
+                println!("Your analysis results and metadata have been saved.");
+                return Ok(());
+            }
+            "help" | "h" | "?" => {
+                display_post_analysis_menu_help();
+            }
+            "" => {
+                println!("Please enter a selection (1-4) or 'help' for assistance.");
+                println!();
+            }
+            _ => {
+                println!("Invalid selection: '{}'", user_selection);
+                println!("Please choose 1-4, or type 'help' for assistance.");
+                println!();
+            }
+        }
+    }
+}
+
+/// Displays the main post-analysis menu options
+/// 
+/// This shows users what they can do next after CSV analysis is complete,
+/// following a logical progression from analysis → data loading → advanced features.
+fn display_post_analysis_main_menu() {
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("  What would you like to do next?");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("  1. Review/Edit Column Data Types");
+    println!("  2. 'Load' Data into No-Load DataFrame (not in active memory)");
+    println!("  3. Export Current Analysis Report");
+    println!("  4. Quit");
+    println!();
+    println!("  💡 Tip: Data loading (option 2) enables visualizations and advanced analysis");
+    println!("  Type 'help' for detailed descriptions of each option.");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+}
+
+/// Gets user menu selection with proper input handling and validation
+/// 
+/// This function handles user input for menu selections, providing clear
+/// prompts and handling edge cases like empty input.
+/// 
+/// # Arguments
+/// * `prompt_text` - The prompt message to display to the user
+/// 
+/// # Returns
+/// * `RowsAndColumnsResult<String>` - The user's input trimmed of whitespace
+/// 
+/// # Errors
+/// * `RowsAndColumnsError::FileSystemError` - If input/output operations fail
+fn get_user_menu_selection(prompt_text: &str) -> RowsAndColumnsResult<String> {
+    print!("{}: ", prompt_text);
+    
+    // Ensure the prompt is displayed immediately
+    io::stdout().flush().map_err(|io_error| {
+        create_file_system_error("Failed to flush stdout for menu input prompt", io_error)
+    })?;
+    
+    // Read user input from stdin
+    let mut user_input = String::new();
+    io::stdin().read_line(&mut user_input).map_err(|io_error| {
+        create_file_system_error("Failed to read user input from stdin", io_error)
+    })?;
+    
+    // Return trimmed input (removes newlines and whitespace)
+    Ok(user_input.trim().to_string())
+}
+
+/// Displays detailed help information for post-analysis menu options
+/// 
+/// This function provides comprehensive explanations of what each menu
+/// option does and when it should be used in the workflow.
+fn display_post_analysis_menu_help() {
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("  Menu Options Help");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    
+    println!("1. Review/Edit Column Data Types");
+    println!("   • Verify that automatic type detection was accurate");
+    println!("   • Change data types if needed (boolean → string, etc.)");
+    println!("   • Essential step before loading data for analysis");
+    println!("   • Example: Change 'age' from string to integer");
+    println!();
+    
+    println!("2. 'Load' Data into No-Load DataFrame (not in active memory)");
+    println!("   • Creates scalable directory-based storage system");
+    println!("   • Each column becomes a directory with individual cell files");
+    println!("   • Enables memory-efficient processing of large datasets");
+    println!("   • Required before visualizations and advanced analysis");
+    println!();
+    
+    println!("3. Export Current Analysis Report");
+    println!("   • Saves statistical analysis results to a file");
+    println!("   • Includes column types, statistics, and metadata");
+    println!("   • Useful for documentation and sharing results");
+    println!("   • Can be done before or after data loading");
+    println!();
+    
+    println!("4. Quit");
+    println!("   • Exit the application safely");
+    println!("   • Analysis results and metadata files are preserved");
+    println!("   • You can restart analysis later with the same CSV file");
+    println!();
+    
+    println!("💡 Recommended workflow:");
+    println!("   Analysis → Review Types → Load Data → Visualizations");
+    println!();
+    
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+}
+
 /// Processes a CSV file specified via command line argument with enhanced statistical analysis
 /// 
 /// This function validates the provided CSV file path, performs comprehensive analysis including
@@ -476,6 +641,9 @@ fn process_csv_file_from_command_line(
     // Step 6: Display completion status and next steps
     display_enhanced_csv_processing_completion_status(&csv_analysis_results, directory_paths);
     
+    // Step 7: Launch interactive menu for next steps
+    launch_interactive_post_analysis_menu(&csv_analysis_results, &enhanced_analysis_results, directory_paths)?;
+
     Ok(())
 }
 
